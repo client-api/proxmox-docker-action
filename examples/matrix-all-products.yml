@@ -1,0 +1,45 @@
+# Example: Run an SDK E2E suite against all four Proxmox products
+# in parallel.
+#
+# Each matrix cell is an independent job — failures in one product
+# don't cancel the others (fail-fast: false), so you see every
+# breakage in a single run.
+
+name: SDK E2E (all products)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        product: [pve, pbs, pmg, pdm]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: client-api/proxmox-docker-action@v1
+        with:
+          product: ${{ matrix.product }}
+          tag: '9.2'
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:e2e:${{ matrix.product }}
+        env:
+          NODE_TLS_REJECT_UNAUTHORIZED: '0'

@@ -1,0 +1,77 @@
+# Example: Run multiple language-specific SDK suites against the
+# same Proxmox products. Each (product, language) cell is an
+# independent runner — failures in one don't cancel the others.
+#
+# Adjust the `language` list + `run:` line to match the SDK
+# frameworks you actually publish.
+
+name: SDK E2E (multi-language)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        product: [pve, pbs, pmg, pdm]
+        language: [typescript, python, go]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: client-api/proxmox-docker-action@v1
+        with:
+          product: ${{ matrix.product }}
+          tag: '9.2'
+
+      # Language-specific setup. Replace each branch with whatever your
+      # SDK suite needs to run.
+      - uses: pnpm/action-setup@v4
+        if: matrix.language == 'typescript'
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        if: matrix.language == 'typescript'
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-python@v5
+        if: matrix.language == 'python'
+        with:
+          python-version: '3.13'
+
+      - uses: actions/setup-go@v5
+        if: matrix.language == 'go'
+        with:
+          go-version: '1.24'
+
+      - name: Run ${{ matrix.language }} ${{ matrix.product }} suite
+        run: |
+          case "${{ matrix.language }}" in
+            typescript) pnpm install --frozen-lockfile && pnpm test:e2e:${{ matrix.product }} ;;
+            python)     pip install -e . && pytest tests/e2e/test_${{ matrix.product }}.py ;;
+            go)         go test ./e2e/${{ matrix.product }}/... ;;
+          esac
+        env:
+          # The action emits PROXMOX_URL, PROXMOX_USER, etc. — most
+          # SDKs read whichever subset they care about.
+          NODE_TLS_REJECT_UNAUTHORIZED: '0'
+          PYTHONHTTPSVERIFY: '0'

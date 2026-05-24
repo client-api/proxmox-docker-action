@@ -1,0 +1,34 @@
+{
+  "name": "proxmox-docker-action",
+  "description": "GitHub Action that starts a proxmox-docker test image and cleans it up at job end.",
+  "version": "1.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/client-api/proxmox-docker-action",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/client-api/proxmox-docker-action.git"
+  },
+  "bugs": {
+    "url": "https://github.com/client-api/proxmox-docker-action/issues"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "bundle:main": "ncc build src/main.ts --out dist/main --minify --license licenses.txt",
+    "bundle:post": "ncc build src/post.ts --out dist/post --minify --license licenses.txt",
+    "bundle": "rm -rf dist && npm run bundle:main && npm run bundle:post",
+    "typecheck": "tsc --noEmit",
+    "all": "npm run typecheck && npm run bundle"
+  },
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/exec": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@vercel/ncc": "^0.38.3",
+    "typescript": "^5.7.3"
+  }
+}

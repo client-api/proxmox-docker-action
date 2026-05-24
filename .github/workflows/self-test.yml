@@ -1,0 +1,141 @@
+name: Self-test
+
+# Validate the action against the live proxmox-docker images. Runs
+# the action exactly the way a downstream caller would (matrix over
+# all four products), then exercises the credential exports + the
+# lifecycle gates.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: self-test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  smoke:
+    name: smoke-${{ matrix.product }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - product: pve
+            tag: latest
+            health_path: /api2/json/version
+          - product: pbs
+            tag: latest
+            health_path: /api2/json/version
+          - product: pmg
+            tag: latest
+            health_path: /api2/json/version
+          - product: pdm
+            tag: latest
+            health_path: /api2/extjs/version
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Authenticated GHCR pulls have a much higher rate-limit
+      # ceiling than anonymous ones. Always-on is the safe default.
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up proxmox-docker
+        id: proxmox
+        uses: ./
+        with:
+          product: ${{ matrix.product }}
+          tag: ${{ matrix.tag }}
+
+      - name: Print resolved outputs
+        run: |
+          echo "container-id        = ${{ steps.proxmox.outputs.container-id }}"
+          echo "container-name      = ${{ steps.proxmox.outputs.container-name }}"
+          echo "url                 = ${{ steps.proxmox.outputs.url }}"
+          echo "host-port           = ${{ steps.proxmox.outputs.host-port }}"
+          echo "kvm-available       = ${{ steps.proxmox.outputs.kvm-available }}"
+          echo "cgroupv2-available  = ${{ steps.proxmox.outputs.cgroupv2-available }}"
+
+      - name: Hit /version (anonymous probe)
+        run: |
+          # Don't use -f; the products all 401 anonymous /version
+          # requests but the daemon being alive is what we care about.
+          code=$(curl -ks -o /dev/null -w '%{http_code}' \
+            "${{ steps.proxmox.outputs.url }}${{ matrix.health_path }}")
+          case "$code" in
+            2??|401) echo "version endpoint up (HTTP $code)" ;;
+            *) echo "::error::unexpected HTTP $code from /version"; exit 1 ;;
+          esac
+
+      - name: Verify env exports
+        run: |
+          # The action should have populated $PROXMOX_* from
+          # /run/credentials.json. Spot-check the load-bearing ones.
+          test -n "$PROXMOX_URL"
+          test -n "$PROXMOX_USER"
+          test -n "$PROXMOX_PASSWORD"
+          test -n "$PROXMOX_TOKEN_HEADER_VALUE"
+          echo "env exports look healthy (URL=$PROXMOX_URL USER=$PROXMOX_USER)"
+
+      - name: Verify ticket auth
+        run: |
+          ticket_path=/api2/json/access/ticket
+          [ "${{ matrix.product }}" = "pdm" ] && ticket_path=/api2/extjs/access/ticket
+          body=$(curl -ksS \
+            -d "username=$PROXMOX_USER&password=$PROXMOX_PASSWORD" \
+            "$PROXMOX_URL$ticket_path")
+          # Both Perl-family (ticket in body) and Rust-family
+          # (ticket in Set-Cookie) shapes contain a CSRF token in
+          # the body, so probe that.
+          csrf=$(echo "$body" | jq -r '.data.CSRFPreventionToken // empty')
+          test -n "$csrf" || { echo "::error::no CSRF token in ticket response"; echo "$body"; exit 1; }
+          echo "ticket auth ok (CSRF: ${csrf:0:16}...)"
+
+      - name: Verify token auth (skip PMG — no token API)
+        if: matrix.product != 'pmg'
+        run: |
+          code=$(curl -ks -o /dev/null -w '%{http_code}' \
+            -H "Authorization: $PROXMOX_TOKEN_HEADER_VALUE" \
+            "$PROXMOX_URL${{ matrix.health_path }}")
+          [ "$code" = "200" ] || { echo "::error::token auth failed (HTTP $code)"; exit 1; }
+          echo "token auth ok"
+
+      - name: VM lifecycle (only with KVM, PVE only)
+        if: matrix.product == 'pve' && steps.proxmox.outputs.kvm-available == 'true'
+        run: |
+          docker exec ${{ steps.proxmox.outputs.container-name }} qm start 100
+          sleep 3
+          docker exec ${{ steps.proxmox.outputs.container-name }} qm status 100 | grep -q running
+          docker exec ${{ steps.proxmox.outputs.container-name }} qm shutdown 100
+          docker exec ${{ steps.proxmox.outputs.container-name }} qm status 100 | grep -q stopped
+          echo "VM lifecycle ok"
+
+      - name: CT lifecycle (only with cgroupv2, PVE only)
+        if: matrix.product == 'pve' && steps.proxmox.outputs.cgroupv2-available == 'true'
+        run: |
+          docker exec ${{ steps.proxmox.outputs.container-name }} pct start 200
+          sleep 3
+          docker exec ${{ steps.proxmox.outputs.container-name }} pct status 200 | grep -q running
+          docker exec ${{ steps.proxmox.outputs.container-name }} pct exec 200 -- sh -c 'echo alpine'
+          docker exec ${{ steps.proxmox.outputs.container-name }} pct stop 200
+          echo "CT lifecycle ok"
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker logs ${{ steps.proxmox.outputs.container-name }} || true
+
+      # No explicit `Stop container` step — the action's post-step
+      # (post-if: always()) handles cleanup automatically.

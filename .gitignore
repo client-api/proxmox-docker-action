@@ -1,0 +1,7 @@
+node_modules/
+build/
+*.log
+.DS_Store
+
+# dist/ is intentionally committed — GitHub Actions runs from this
+# directory at action invocation, with no `npm install` step.

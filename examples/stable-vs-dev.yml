@@ -1,0 +1,54 @@
+# Example: Run the SDK suite against both stable and dev channels in
+# parallel. The dev channel surfaces upstream regressions before they
+# land in stable; `continue-on-error` keeps a dev-channel break from
+# blocking merges.
+
+name: SDK E2E (stable + dev)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run the dev probe daily so upstream churn shows up even when
+    # there's no PR activity.
+    - cron: '7 4 * * *'
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [stable, dev]
+        include:
+          - channel: stable
+            tag: '9.2'
+          - channel: dev
+            tag: 'dev'
+
+    continue-on-error: ${{ matrix.channel == 'dev' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: client-api/proxmox-docker-action@v1
+        with:
+          product: pve
+          tag: ${{ matrix.tag }}
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:e2e:pve
+        env:
+          NODE_TLS_REJECT_UNAUTHORIZED: '0'

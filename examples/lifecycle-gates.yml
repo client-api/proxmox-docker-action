@@ -1,0 +1,52 @@
+# Example: Exercise the VM (qm) and CT (pct) lifecycle endpoints
+# against the fixture VM and CT baked into the PVE image. Both run
+# only when the runner kernel supports them, so the workflow stays
+# green on runners without nested virtualisation or with cgroup v1.
+
+name: PVE workload lifecycle
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lifecycle:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: pve
+        uses: client-api/proxmox-docker-action@v1
+        with:
+          product: pve
+          tag: '9.2'
+
+      - name: VM lifecycle (needs /dev/kvm)
+        if: steps.pve.outputs.kvm-available == 'true'
+        run: |
+          name="${{ steps.pve.outputs.container-name }}"
+          docker exec "$name" qm start 100
+          sleep 3
+          docker exec "$name" qm status 100 | grep -q running
+          docker exec "$name" qm shutdown 100
+          docker exec "$name" qm status 100 | grep -q stopped
+
+      - name: CT lifecycle (needs cgroup v2)
+        if: steps.pve.outputs.cgroupv2-available == 'true'
+        run: |
+          name="${{ steps.pve.outputs.container-name }}"
+          docker exec "$name" pct start 200
+          docker exec "$name" pct exec 200 -- sh -c 'cat /etc/alpine-release'
+          docker exec "$name" pct stop 200

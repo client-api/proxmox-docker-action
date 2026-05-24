@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+# TypeScript-based GitHub Action that starts a proxmox-docker test
+# image, waits for it to become healthy, and exposes its API to
+# subsequent steps. A `post:` entry point cleans up at job end so
+# callers don't need to remember to stop the container.
+#
+# Source: src/*.ts (bundled with @vercel/ncc into dist/*/index.js;
+# the dist/ tree is committed because GitHub Actions runs from it
+# directly with no `npm install` step).
+
+name: 'Setup proxmox-docker'
+description: 'Start a Proxmox VE/PBS/PMG/PDM test container and expose its API to subsequent steps.'
+author: 'client-api'
+branding:
+  icon: 'server'
+  color: 'orange'
+
+inputs:
+  product:
+    description: 'Which Proxmox product to start. One of: pve, pbs, pmg, pdm.'
+    required: true
+  tag:
+    description: 'Image tag (e.g. "9.2", "latest", "9.2.2", "dev"). See VERSIONING.md in proxmox-docker.'
+    required: false
+    default: 'latest'
+  registry:
+    description: 'Container registry path. Override only if you mirror the images.'
+    required: false
+    default: 'ghcr.io/client-api/proxmox-docker'
+  container-name:
+    description: 'Docker container name. Default: <product>-test.'
+    required: false
+    default: ''
+  host-port:
+    description: 'Host port to bind the API to. Default: 8006 (pve/pmg), 8007 (pbs), 8443 (pdm).'
+    required: false
+    default: ''
+  env-prefix:
+    description: 'Prefix for credential environment variables exported to $GITHUB_ENV.'
+    required: false
+    default: 'PROXMOX'
+  enable-kvm:
+    description: 'auto | true | false. With "auto", probes /dev/kvm and configures it via udev when present.'
+    required: false
+    default: 'auto'
+  seed-fixture-vm:
+    description: 'Whether to seed the fixture VM (vmid 100, "tiny-test") on PVE.'
+    required: false
+    default: 'true'
+  seed-fixture-ct:
+    description: 'Whether to seed the fixture CT (vmid 200, "tiny-ct") on PVE.'
+    required: false
+    default: 'true'
+  root-password:
+    description: 'Override the baked-in root@pam password. Default: "proxmox123".'
+    required: false
+    default: ''
+  wait-timeout:
+    description: 'Max seconds to wait for the container healthcheck to flip to "healthy".'
+    required: false
+    default: '120'
+
+outputs:
+  container-id:
+    description: 'Docker container ID of the started image.'
+  container-name:
+    description: 'Resolved container name.'
+  url:
+    description: 'API URL on the host (https://localhost:<port>).'
+  host-port:
+    description: 'Host port the API is bound to.'
+  credentials-json-path:
+    description: 'Path to the credentials JSON copied out of the container.'
+  kvm-available:
+    description: '"true" when /dev/kvm is r+w on the runner.'
+  cgroupv2-available:
+    description: '"true" when the host runs cgroup v2.'
+
+runs:
+  using: 'node24'
+  main: 'dist/main/index.js'
+  post: 'dist/post/index.js'
+  post-if: 'always()'
